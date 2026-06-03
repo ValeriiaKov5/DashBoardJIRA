@@ -6,6 +6,8 @@ namespace JiraSprintDashboard;
 
 public class JiraClient : IDisposable
 {
+    private static readonly DateTime MinSprintCreatedDate = new(2026, 1, 1);
+
     private readonly HttpClient _httpClient;
     private readonly string _apiPrefix;
     private readonly JsonSerializerOptions _jsonOptions = new()
@@ -102,10 +104,14 @@ public class JiraClient : IDisposable
             $"rest/agile/1.0/board/{boardId}/sprint?state=active,future,closed&maxResults=200", ct);
 
         return sprints.Values
+            .Where(IsSprintCreatedAfterCutoff)
             .OrderByDescending(s => s.Id)
             .Select(s => new SprintInfo(s.Id, s.Name, s.State))
             .ToList();
     }
+
+    private static bool IsSprintCreatedAfterCutoff(JiraSprintItem sprint) =>
+        sprint.CreatedDate is { } created && created.Date > MinSprintCreatedDate;
 
     public async Task<List<TeamMember>> GetProjectUsersAsync(string projectKey, CancellationToken ct)
     {
@@ -150,20 +156,13 @@ public class JiraClient : IDisposable
         string? memberAccountId,
         CancellationToken ct)
     {
-        var jql = $"project = \"{projectKey}\" AND sprint = {sprintId} ORDER BY key ASC";
-        var payload = $$"""
+        var jql = $"project = {EscapeJqlValue(projectKey)} AND sprint = {sprintId} ORDER BY key ASC";
+        var payload = JsonSerializer.Serialize(new JiraSearchRequest
         {
-          "jql": "{{jql}}",
-          "maxResults": 1000,
-          "fields": [
-            "summary",
-            "status",
-            "assignee",
-            "subtasks",
-            "worklog"
-          ]
-        }
-        """;
+            Jql = jql,
+            MaxResults = 1000,
+            Fields = ["summary", "status", "assignee", "subtasks", "worklog"]
+        }, _jsonOptions);
 
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{_apiPrefix}/search");
         request.Content = new StringContent(payload, Encoding.UTF8, "application/json");
@@ -215,6 +214,18 @@ public class JiraClient : IDisposable
 
     private static double SecondsToHours(int seconds) =>
         Math.Round(seconds / 3600d, 2, MidpointRounding.AwayFromZero);
+
+    private static string EscapeJqlValue(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return "''";
+        }
+
+        return value.All(c => char.IsLetterOrDigit(c) || c == '_' || c == '-')
+            ? value
+            : $"'{value.Replace("'", "\\'", StringComparison.Ordinal)}'";
+    }
 
     private async Task<T> GetAsync<T>(string relativeUrl, CancellationToken ct)
     {

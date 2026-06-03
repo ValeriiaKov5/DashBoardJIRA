@@ -33,6 +33,18 @@ public class IssueDashboardRow
     public double SpentHours { get; init; }
 }
 
+public class JiraSearchRequest
+{
+    [JsonPropertyName("jql")]
+    public string Jql { get; set; } = "";
+
+    [JsonPropertyName("maxResults")]
+    public int MaxResults { get; set; }
+
+    [JsonPropertyName("fields")]
+    public List<string> Fields { get; set; } = new();
+}
+
 public class JiraSearchResponse
 {
     [JsonPropertyName("issues")]
@@ -189,6 +201,12 @@ public class JiraSprintItem
 
     [JsonPropertyName("state")]
     public string State { get; set; } = "";
+
+    [JsonPropertyName("createdDate")]
+    public DateTimeOffset? CreatedDate { get; set; }
+
+    [JsonPropertyName("startDate")]
+    public DateTimeOffset? StartDate { get; set; }
 }
 
 public class JiraRoleUsersResponse
