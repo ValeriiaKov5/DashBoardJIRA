@@ -58,7 +58,7 @@ public class JiraClient : IDisposable
         {
             var response = await GetAsync<JiraProjectSearchResponse>(
                 $"{_apiPrefix}/project/search?maxResults=200", ct);
-            var match = response.Values.FirstOrDefault(
+            var match = response.AllProjects.FirstOrDefault(
                 p => p.Name.Equals(projectName, StringComparison.OrdinalIgnoreCase));
             return match is null ? null : new ProjectInfo(match.Id, match.Key, match.Name);
         }
@@ -67,7 +67,7 @@ public class JiraClient : IDisposable
         {
             var searchResponse = await GetAsync<JiraProjectSearchResponse>(
                 $"{_apiPrefix}/project/search?maxResults=200", ct);
-            var searchMatch = searchResponse.Values.FirstOrDefault(
+            var searchMatch = searchResponse.AllProjects.FirstOrDefault(
                 p => p.Name.Equals(projectName, StringComparison.OrdinalIgnoreCase));
             if (searchMatch is not null)
             {
@@ -112,7 +112,11 @@ public class JiraClient : IDisposable
 
         foreach (var role in roles.RoleUrls)
         {
-            if (!Uri.TryCreate(role.Value.GetString(), UriKind.Absolute, out var roleUri))
+            var roleUrl = role.Value.ValueKind == JsonValueKind.String
+                ? role.Value.GetString()
+                : role.Value.ToString();
+            if (string.IsNullOrWhiteSpace(roleUrl)
+                || !Uri.TryCreate(roleUrl, UriKind.Absolute, out var roleUri))
             {
                 continue;
             }
@@ -120,18 +124,13 @@ public class JiraClient : IDisposable
             var roleResponse = await GetAbsoluteAsync<JiraRoleUsersResponse>(roleUri, ct);
             foreach (var actor in roleResponse.Actors)
             {
-                if (actor.ActorUser is null)
-                {
-                    continue;
-                }
-
-                var userId = actor.ActorUser.UserId;
+                var userId = actor.ResolveUserId();
                 if (string.IsNullOrWhiteSpace(userId))
                 {
                     continue;
                 }
 
-                var member = new TeamMember(userId, actor.ActorUser.DisplayName);
+                var member = new TeamMember(userId, actor.ResolveDisplayName());
                 result[member.AccountId] = member;
             }
         }

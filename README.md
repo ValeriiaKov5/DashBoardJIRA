@@ -49,11 +49,35 @@
 
 ## Сборка EXE на GitHub (без установки .NET на вашем ПК)
 
-1. Загрузите файлы проекта в репозиторий GitHub.
-2. Вкладка **Actions** → workflow **Build Windows EXE** → **Run workflow** (или дождитесь запуска после push).
-3. После успешной сборки скачайте **Artifacts** → `JiraSprintDashboard-exe` (zip с `.exe`).
+### Структура репозитория (важно)
 
-Workflow: `.github/workflows/build.yml`
+В **корне** репозитория на GitHub должны лежать файлы напрямую:
+
+```
+JiraSprintDashboard.csproj
+Program.cs
+MainForm.cs
+...
+.github/workflows/build.yml
+```
+
+**Неправильно:** папка `JiraSprintDashboard/JiraSprintDashboard.csproj` внутри ещё одной папки (частая ошибка при upload).
+
+### Запуск сборки
+
+1. Загрузите все файлы проекта (включая `.github/workflows/build.yml`).
+2. **Settings** → **Actions** → **General** → Allow all actions.
+3. Вкладка **Actions** → **Build Windows EXE** → **Run workflow**.
+4. Откройте запуск с зелёной галочкой → **Artifacts** → `JiraSprintDashboard-exe`.
+
+### Если сборка красная (failed)
+
+1. Откройте failed run → шаг с красным крестиком.
+2. Типичные причины:
+   - **JiraSprintDashboard.csproj не найден** — файлы не в корне репозитория.
+   - **EXE не создан** — не все `.cs` файлы загружены.
+   - **Actions отключены** — включите в Settings.
+3. Обновите на GitHub файл `.github/workflows/build.yml` из этого проекта и запустите **Run workflow** снова.
 
 ## Сборка EXE локально
 

@@ -141,6 +141,12 @@ public class JiraProjectSearchResponse
 {
     [JsonPropertyName("values")]
     public List<JiraProjectItem> Values { get; set; } = new();
+
+    [JsonPropertyName("projects")]
+    public List<JiraProjectItem> Projects { get; set; } = new();
+
+    public IEnumerable<JiraProjectItem> AllProjects =>
+        Values.Count > 0 ? Values : Projects;
 }
 
 public class JiraProjectItem
@@ -195,6 +201,21 @@ public class JiraRoleActor
 {
     [JsonPropertyName("actorUser")]
     public JiraUser? ActorUser { get; set; }
+
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = "";
+
+    [JsonPropertyName("displayName")]
+    public string DisplayName { get; set; } = "";
+
+    public string? ResolveUserId() =>
+        !string.IsNullOrWhiteSpace(ActorUser?.UserId) ? ActorUser.UserId
+        : !string.IsNullOrWhiteSpace(Name) ? Name
+        : null;
+
+    public string ResolveDisplayName() =>
+        ActorUser?.DisplayName
+        ?? (!string.IsNullOrWhiteSpace(DisplayName) ? DisplayName : Name);
 }
 
 public class JiraProjectRolesResponse

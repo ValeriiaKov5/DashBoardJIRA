@@ -76,6 +76,7 @@ public class MainForm : Form
         };
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 280));
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        panel.RowCount = 9;
 
         AddLabeledControl(panel, "Jira URL", _txtBaseUrl, 0);
 
@@ -293,7 +294,7 @@ public class MainForm : Form
         }
         catch (Exception ex)
         {
-            SetSettingsStatus(ex.Message, true);
+            SetSettingsStatus(GetErrorMessage(ex), true);
         }
         finally
         {
@@ -397,7 +398,7 @@ public class MainForm : Form
         }
         catch (Exception ex)
         {
-            _lblMainStatus.Text = ex.Message;
+            _lblMainStatus.Text = GetErrorMessage(ex);
         }
         finally
         {
@@ -419,6 +420,9 @@ public class MainForm : Form
 
     private JiraClient CreateClientFromSettingsUi() =>
         new(_txtBaseUrl.Text.Trim(), _txtUsername.Text.Trim(), _txtToken.Text.Trim());
+
+    private static string GetErrorMessage(Exception ex) =>
+        ex.InnerException is null ? ex.Message : $"{ex.Message} ({ex.InnerException.Message})";
 
     private void SetSettingsStatus(string text, bool isError = false)
     {
