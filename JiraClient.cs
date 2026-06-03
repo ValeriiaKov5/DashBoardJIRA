@@ -251,7 +251,7 @@ public class JiraClient : IDisposable
     private static void EnsureJsonResponse(string body, int? statusCode)
     {
         var trimmed = body.TrimStart();
-        if (!trimmed.StartsWith('<', StringComparison.Ordinal))
+        if (!trimmed.StartsWith("<", StringComparison.Ordinal))
         {
             return;
         }
