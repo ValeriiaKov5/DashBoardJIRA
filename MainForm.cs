@@ -8,6 +8,7 @@ public class MainForm : Form
     private readonly AppSettings _settings;
 
     private readonly TextBox _txtBaseUrl = new();
+    private readonly TextBox _txtUsername = new();
     private readonly TextBox _txtToken = new();
     private readonly TextBox _txtProjectName = new();
     private readonly ComboBox _cmbSprints = new();
@@ -76,35 +77,37 @@ public class MainForm : Form
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 280));
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
-        AddLabeledControl(panel, "Jira URL (например https://company.atlassian.net)", _txtBaseUrl, 0);
+        AddLabeledControl(panel, "Jira URL", _txtBaseUrl, 0);
+
+        AddLabeledControl(panel, "Логин Jira (для jira.sminex.com и др.)", _txtUsername, 1);
 
         _txtToken.UseSystemPasswordChar = true;
-        AddLabeledControl(panel, "API токен Jira (Bearer)", _txtToken, 1);
+        AddLabeledControl(panel, "Пароль или API-токен", _txtToken, 2);
 
-        AddLabeledControl(panel, "Наименование проекта Jira", _txtProjectName, 2);
+        AddLabeledControl(panel, "Наименование проекта Jira", _txtProjectName, 3);
 
         _btnLoadProjectData.Text = "Загрузить проект, спринты и команду";
         _btnLoadProjectData.Height = 36;
         _btnLoadProjectData.BackColor = Color.FromArgb(220, 235, 245);
         _btnLoadProjectData.Click += async (_, _) => await LoadProjectDataAsync();
-        panel.Controls.Add(_btnLoadProjectData, 1, 3);
+        panel.Controls.Add(_btnLoadProjectData, 1, 4);
 
         _cmbSprints.DropDownStyle = ComboBoxStyle.DropDownList;
-        AddLabeledControl(panel, "Спринт", _cmbSprints, 4);
+        AddLabeledControl(panel, "Спринт", _cmbSprints, 5);
 
         _clbTeam.Height = 220;
         _clbTeam.CheckOnClick = true;
-        AddLabeledControl(panel, "Команда продукта (участники Jira)", _clbTeam, 5);
+        AddLabeledControl(panel, "Команда продукта (участники Jira)", _clbTeam, 6);
 
         _btnSaveSettings.Text = "Сохранить настройки";
         _btnSaveSettings.Height = 36;
         _btnSaveSettings.BackColor = Color.FromArgb(210, 240, 225);
         _btnSaveSettings.Click += (_, _) => SaveSettings();
-        panel.Controls.Add(_btnSaveSettings, 1, 6);
+        panel.Controls.Add(_btnSaveSettings, 1, 7);
 
         _lblSettingsStatus.AutoSize = true;
         _lblSettingsStatus.ForeColor = Color.FromArgb(70, 70, 70);
-        panel.Controls.Add(_lblSettingsStatus, 1, 7);
+        panel.Controls.Add(_lblSettingsStatus, 1, 8);
 
         tab.Controls.Add(panel);
     }
@@ -230,6 +233,7 @@ public class MainForm : Form
     private void LoadSettingsToUi()
     {
         _txtBaseUrl.Text = _settings.JiraBaseUrl;
+        _txtUsername.Text = _settings.JiraUsername;
         _txtToken.Text = _settings.Token;
         _txtProjectName.Text = _settings.ProjectName;
         _lblSettingsStatus.Text = "Настройки загружены.";
@@ -237,6 +241,20 @@ public class MainForm : Form
 
     private async Task LoadProjectDataAsync()
     {
+        var baseUrl = _txtBaseUrl.Text.Trim();
+        if (!baseUrl.Contains("atlassian.net", StringComparison.OrdinalIgnoreCase)
+            && string.IsNullOrWhiteSpace(_txtUsername.Text))
+        {
+            SetSettingsStatus("Для корпоративной Jira укажите логин.", true);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_txtProjectName.Text))
+        {
+            SetSettingsStatus("Укажите наименование проекта Jira.", true);
+            return;
+        }
+
         SetSettingsStatus("Загрузка данных проекта...");
         ToggleSettingsButtons(false);
         try
@@ -323,6 +341,7 @@ public class MainForm : Form
         }
 
         _settings.JiraBaseUrl = _txtBaseUrl.Text.Trim();
+        _settings.JiraUsername = _txtUsername.Text.Trim();
         _settings.Token = _txtToken.Text.Trim();
         _settings.ProjectName = _txtProjectName.Text.Trim();
         _settings.TeamMemberAccountIds = _clbTeam.CheckedItems
@@ -349,7 +368,7 @@ public class MainForm : Form
 
         try
         {
-            using var client = new JiraClient(_settings.JiraBaseUrl, _settings.Token);
+            using var client = new JiraClient(_settings.JiraBaseUrl, _settings.JiraUsername, _settings.Token);
             var selectedMember = _cmbMemberFilter.SelectedItem as TeamMember;
             var memberId = string.IsNullOrWhiteSpace(selectedMember?.AccountId) ? null : selectedMember!.AccountId;
 
@@ -398,7 +417,8 @@ public class MainForm : Form
         return s.Contains("progress") || s.Contains("работ") || s.Contains("in review");
     }
 
-    private JiraClient CreateClientFromSettingsUi() => new(_txtBaseUrl.Text.Trim(), _txtToken.Text.Trim());
+    private JiraClient CreateClientFromSettingsUi() =>
+        new(_txtBaseUrl.Text.Trim(), _txtUsername.Text.Trim(), _txtToken.Text.Trim());
 
     private void SetSettingsStatus(string text, bool isError = false)
     {

@@ -7,12 +7,13 @@ namespace JiraSprintDashboard;
 public class JiraClient : IDisposable
 {
     private readonly HttpClient _httpClient;
+    private readonly string _apiPrefix;
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
         PropertyNameCaseInsensitive = true
     };
 
-    public JiraClient(string baseUrl, string token)
+    public JiraClient(string baseUrl, string? username, string token)
     {
         if (string.IsNullOrWhiteSpace(baseUrl))
         {
@@ -21,24 +22,68 @@ public class JiraClient : IDisposable
 
         if (string.IsNullOrWhiteSpace(token))
         {
-            throw new InvalidOperationException("Укажите API токен Jira.");
+            throw new InvalidOperationException("Укажите пароль или API-токен Jira.");
         }
+
+        var trimmedUrl = baseUrl.TrimEnd('/');
+        _apiPrefix = trimmedUrl.Contains("atlassian.net", StringComparison.OrdinalIgnoreCase)
+            ? "rest/api/3"
+            : "rest/api/2";
 
         _httpClient = new HttpClient
         {
-            BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/")
+            BaseAddress = new Uri(trimmedUrl + "/")
         };
-        _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token.Trim());
         _httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+
+        var trimmedToken = token.Trim();
+        var trimmedUsername = username?.Trim();
+        if (!string.IsNullOrWhiteSpace(trimmedUsername))
+        {
+            var credentials = Convert.ToBase64String(
+                Encoding.UTF8.GetBytes($"{trimmedUsername}:{trimmedToken}"));
+            _httpClient.DefaultRequestHeaders.Authorization =
+                new AuthenticationHeaderValue("Basic", credentials);
+        }
+        else
+        {
+            _httpClient.DefaultRequestHeaders.Authorization =
+                new AuthenticationHeaderValue("Bearer", trimmedToken);
+        }
     }
 
     public async Task<ProjectInfo?> FindProjectByNameAsync(string projectName, CancellationToken ct)
     {
-        var response = await GetAsync<JiraProjectSearchResponse>($"rest/api/3/project/search?maxResults=200", ct);
-        var match = response.Values.FirstOrDefault(
-            p => p.Name.Equals(projectName, StringComparison.OrdinalIgnoreCase));
+        if (_apiPrefix == "rest/api/3")
+        {
+            var response = await GetAsync<JiraProjectSearchResponse>(
+                $"{_apiPrefix}/project/search?maxResults=200", ct);
+            var match = response.Values.FirstOrDefault(
+                p => p.Name.Equals(projectName, StringComparison.OrdinalIgnoreCase));
+            return match is null ? null : new ProjectInfo(match.Id, match.Key, match.Name);
+        }
 
-        return match is null ? null : new ProjectInfo(match.Id, match.Key, match.Name);
+        try
+        {
+            var searchResponse = await GetAsync<JiraProjectSearchResponse>(
+                $"{_apiPrefix}/project/search?maxResults=200", ct);
+            var searchMatch = searchResponse.Values.FirstOrDefault(
+                p => p.Name.Equals(projectName, StringComparison.OrdinalIgnoreCase));
+            if (searchMatch is not null)
+            {
+                return new ProjectInfo(searchMatch.Id, searchMatch.Key, searchMatch.Name);
+            }
+        }
+        catch
+        {
+            // Старые версии Jira Server могут не поддерживать project/search.
+        }
+
+        var projects = await GetAsync<List<JiraProjectItem>>($"{_apiPrefix}/project", ct);
+        var listMatch = projects.FirstOrDefault(
+            p => p.Name.Equals(projectName, StringComparison.OrdinalIgnoreCase)
+                || p.Key.Equals(projectName, StringComparison.OrdinalIgnoreCase));
+        return listMatch is null ? null : new ProjectInfo(listMatch.Id, listMatch.Key, listMatch.Name);
     }
 
     public async Task<List<SprintInfo>> GetSprintsAsync(string projectKey, CancellationToken ct)
@@ -63,7 +108,7 @@ public class JiraClient : IDisposable
         var result = new Dictionary<string, TeamMember>(StringComparer.OrdinalIgnoreCase);
 
         var roles = await GetAsync<JiraProjectRolesResponse>(
-            $"rest/api/3/project/{Uri.EscapeDataString(projectKey)}/role", ct);
+            $"{_apiPrefix}/project/{Uri.EscapeDataString(projectKey)}/role", ct);
 
         foreach (var role in roles.RoleUrls)
         {
@@ -75,12 +120,18 @@ public class JiraClient : IDisposable
             var roleResponse = await GetAbsoluteAsync<JiraRoleUsersResponse>(roleUri, ct);
             foreach (var actor in roleResponse.Actors)
             {
-                if (actor.ActorUser is null || string.IsNullOrWhiteSpace(actor.ActorUser.AccountId))
+                if (actor.ActorUser is null)
                 {
                     continue;
                 }
 
-                var member = new TeamMember(actor.ActorUser.AccountId, actor.ActorUser.DisplayName);
+                var userId = actor.ActorUser.UserId;
+                if (string.IsNullOrWhiteSpace(userId))
+                {
+                    continue;
+                }
+
+                var member = new TeamMember(userId, actor.ActorUser.DisplayName);
                 result[member.AccountId] = member;
             }
         }
@@ -111,13 +162,14 @@ public class JiraClient : IDisposable
         }
         """;
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, "rest/api/3/search");
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{_apiPrefix}/search");
         request.Content = new StringContent(payload, Encoding.UTF8, "application/json");
         using var response = await _httpClient.SendAsync(request, ct);
         var body = await response.Content.ReadAsStringAsync(ct);
+        EnsureJsonResponse(body, response.IsSuccessStatusCode ? null : (int)response.StatusCode);
         if (!response.IsSuccessStatusCode)
         {
-            throw new InvalidOperationException($"Jira API error ({(int)response.StatusCode}): {body}");
+            throw new InvalidOperationException($"Jira API error ({(int)response.StatusCode}): {TrimForDisplay(body)}");
         }
 
         var data = JsonSerializer.Deserialize<JiraSearchResponse>(body, _jsonOptions)
@@ -128,18 +180,18 @@ public class JiraClient : IDisposable
         {
             var plannedSeconds = issue.Fields.Subtasks
                 .Where(st => string.IsNullOrWhiteSpace(memberAccountId)
-                    || st.Fields.Assignee?.AccountId == memberAccountId)
+                    || st.Fields.Assignee?.UserId == memberAccountId)
                 .Sum(st => st.Fields.OriginalEstimateSeconds ?? 0);
 
             var spentSeconds = issue.Fields.Worklog?.Worklogs
                 .Where(wl => string.IsNullOrWhiteSpace(memberAccountId)
-                    || wl.Author?.AccountId == memberAccountId)
+                    || wl.Author?.UserId == memberAccountId)
                 .Sum(wl => wl.TimeSpentSeconds) ?? 0;
 
             if (!string.IsNullOrWhiteSpace(memberAccountId)
                 && plannedSeconds == 0
                 && spentSeconds == 0
-                && issue.Fields.Assignee?.AccountId != memberAccountId)
+                && issue.Fields.Assignee?.UserId != memberAccountId)
             {
                 continue;
             }
@@ -165,26 +217,57 @@ public class JiraClient : IDisposable
     {
         using var response = await _httpClient.GetAsync(relativeUrl, ct);
         var body = await response.Content.ReadAsStringAsync(ct);
+        EnsureJsonResponse(body, response.IsSuccessStatusCode ? null : (int)response.StatusCode);
         if (!response.IsSuccessStatusCode)
         {
-            throw new InvalidOperationException($"Jira API error ({(int)response.StatusCode}): {body}");
+            throw new InvalidOperationException($"Jira API error ({(int)response.StatusCode}): {TrimForDisplay(body)}");
         }
 
-        return JsonSerializer.Deserialize<T>(body, _jsonOptions)
-            ?? throw new InvalidOperationException("Не удалось разобрать ответ Jira.");
+        try
+        {
+            return JsonSerializer.Deserialize<T>(body, _jsonOptions)
+                ?? throw new InvalidOperationException("Не удалось разобрать ответ Jira.");
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException(
+                $"Jira вернула неожиданный ответ. {TrimForDisplay(body)}", ex);
+        }
     }
 
     private async Task<T> GetAbsoluteAsync<T>(Uri absoluteUri, CancellationToken ct)
     {
         using var response = await _httpClient.GetAsync(absoluteUri, ct);
         var body = await response.Content.ReadAsStringAsync(ct);
+        EnsureJsonResponse(body, response.IsSuccessStatusCode ? null : (int)response.StatusCode);
         if (!response.IsSuccessStatusCode)
         {
-            throw new InvalidOperationException($"Jira API error ({(int)response.StatusCode}): {body}");
+            throw new InvalidOperationException($"Jira API error ({(int)response.StatusCode}): {TrimForDisplay(body)}");
         }
 
         return JsonSerializer.Deserialize<T>(body, _jsonOptions)
             ?? throw new InvalidOperationException("Не удалось разобрать ответ Jira.");
+    }
+
+    private static void EnsureJsonResponse(string body, int? statusCode)
+    {
+        var trimmed = body.TrimStart();
+        if (!trimmed.StartsWith('<', StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var hint = statusCode is 401 or 403
+            ? "Проверьте логин и пароль (или токен)."
+            : "Проверьте URL Jira и доступ к REST API.";
+        throw new InvalidOperationException(
+            $"Jira вернула HTML вместо JSON ({(statusCode?.ToString() ?? "нет кода")}). {hint}");
+    }
+
+    private static string TrimForDisplay(string body)
+    {
+        var oneLine = body.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        return oneLine.Length <= 300 ? oneLine : oneLine[..300] + "...";
     }
 
     public void Dispose()

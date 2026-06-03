@@ -5,6 +5,7 @@ namespace JiraSprintDashboard;
 public class AppSettings
 {
     public string JiraBaseUrl { get; set; } = "";
+    public string JiraUsername { get; set; } = "";
     public string Token { get; set; } = "";
     public string ProjectName { get; set; } = "";
     public string ProjectKey { get; set; } = "";
@@ -106,8 +107,19 @@ public class JiraUser
     [JsonPropertyName("accountId")]
     public string AccountId { get; set; } = "";
 
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = "";
+
+    [JsonPropertyName("key")]
+    public string Key { get; set; } = "";
+
     [JsonPropertyName("displayName")]
     public string DisplayName { get; set; } = "";
+
+    public string UserId =>
+        !string.IsNullOrWhiteSpace(AccountId) ? AccountId
+        : !string.IsNullOrWhiteSpace(Name) ? Name
+        : Key;
 }
 
 public class JiraWorklogContainer
