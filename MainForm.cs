@@ -80,10 +80,10 @@ public class MainForm : Form
 
         AddLabeledControl(panel, "Jira URL", _txtBaseUrl, 0);
 
-        AddLabeledControl(panel, "Логин Jira (для jira.sminex.com и др.)", _txtUsername, 1);
+        AddLabeledControl(panel, "Логин Jira (можно оставить пустым для API-токена)", _txtUsername, 1);
 
         _txtToken.UseSystemPasswordChar = true;
-        AddLabeledControl(panel, "Пароль или API-токен", _txtToken, 2);
+        AddLabeledControl(panel, "Пароль Jira или API-токен", _txtToken, 2);
 
         AddLabeledControl(panel, "Наименование проекта Jira", _txtProjectName, 3);
 
@@ -242,11 +242,15 @@ public class MainForm : Form
 
     private async Task LoadProjectDataAsync()
     {
-        var baseUrl = _txtBaseUrl.Text.Trim();
-        if (!baseUrl.Contains("atlassian.net", StringComparison.OrdinalIgnoreCase)
-            && string.IsNullOrWhiteSpace(_txtUsername.Text))
+        if (string.IsNullOrWhiteSpace(_txtBaseUrl.Text))
         {
-            SetSettingsStatus("Для корпоративной Jira укажите логин.", true);
+            SetSettingsStatus("Укажите URL Jira.", true);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_txtToken.Text))
+        {
+            SetSettingsStatus("Укажите пароль или API-токен.", true);
             return;
         }
 
@@ -260,7 +264,7 @@ public class MainForm : Form
         ToggleSettingsButtons(false);
         try
         {
-            using var client = CreateClientFromSettingsUi();
+            using var client = await CreateClientWithAuthFallbackAsync();
             var project = await client.FindProjectByNameAsync(_txtProjectName.Text.Trim(), CancellationToken.None);
             if (project is null)
             {
@@ -369,7 +373,8 @@ public class MainForm : Form
 
         try
         {
-            using var client = new JiraClient(_settings.JiraBaseUrl, _settings.JiraUsername, _settings.Token);
+            using var client = await CreateClientWithAuthFallbackAsync(
+                _settings.JiraBaseUrl, _settings.JiraUsername, _settings.Token);
             var selectedMember = _cmbMemberFilter.SelectedItem as TeamMember;
             var memberId = string.IsNullOrWhiteSpace(selectedMember?.AccountId) ? null : selectedMember!.AccountId;
 
@@ -418,8 +423,37 @@ public class MainForm : Form
         return s.Contains("progress") || s.Contains("работ") || s.Contains("in review");
     }
 
-    private JiraClient CreateClientFromSettingsUi() =>
-        new(_txtBaseUrl.Text.Trim(), _txtUsername.Text.Trim(), _txtToken.Text.Trim());
+    private Task<JiraClient> CreateClientWithAuthFallbackAsync() =>
+        CreateClientWithAuthFallbackAsync(
+            _txtBaseUrl.Text.Trim(),
+            _txtUsername.Text.Trim(),
+            _txtToken.Text.Trim());
+
+    private static async Task<JiraClient> CreateClientWithAuthFallbackAsync(
+        string baseUrl,
+        string username,
+        string token)
+    {
+        var hadUsername = !string.IsNullOrWhiteSpace(username);
+        var client = new JiraClient(baseUrl, username, token);
+
+        try
+        {
+            await client.VerifyConnectionAsync(CancellationToken.None);
+            return client;
+        }
+        catch (InvalidOperationException ex) when (hadUsername && IsAuthError(ex))
+        {
+            client.Dispose();
+            var bearerClient = new JiraClient(baseUrl, "", token);
+            await bearerClient.VerifyConnectionAsync(CancellationToken.None);
+            return bearerClient;
+        }
+    }
+
+    private static bool IsAuthError(Exception ex) =>
+        ex.Message.Contains("(401)", StringComparison.Ordinal)
+        || ex.Message.Contains("(403)", StringComparison.Ordinal);
 
     private static string GetErrorMessage(Exception ex) =>
         ex.InnerException is null ? ex.Message : $"{ex.Message} ({ex.InnerException.Message})";

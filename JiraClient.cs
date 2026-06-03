@@ -35,6 +35,7 @@ public class JiraClient : IDisposable
             BaseAddress = new Uri(trimmedUrl + "/")
         };
         _httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("JiraSprintDashboard/1.0");
 
         var trimmedToken = token.Trim();
         var trimmedUsername = username?.Trim();
@@ -51,6 +52,9 @@ public class JiraClient : IDisposable
                 new AuthenticationHeaderValue("Bearer", trimmedToken);
         }
     }
+
+    public Task VerifyConnectionAsync(CancellationToken ct) =>
+        GetAsync<JsonElement>($"{_apiPrefix}/myself", ct);
 
     public async Task<ProjectInfo?> FindProjectByNameAsync(string projectName, CancellationToken ct)
     {
@@ -256,9 +260,14 @@ public class JiraClient : IDisposable
             return;
         }
 
-        var hint = statusCode is 401 or 403
-            ? "Проверьте логин и пароль (или токен)."
-            : "Проверьте URL Jira и доступ к REST API.";
+        var hint = statusCode switch
+        {
+            401 => "Неверный логин или пароль.",
+            403 => "Доступ запрещён. Попробуйте: 1) логин + пароль от Jira; 2) логин + API-токен (токен вместо пароля); "
+                + "3) оставьте логин пустым и вставьте только API-токен (Bearer). "
+                + "Токен создаётся в Jira: Профиль → Personal Access Tokens.",
+            _ => "Проверьте URL Jira и доступ к REST API."
+        };
         throw new InvalidOperationException(
             $"Jira вернула HTML вместо JSON ({(statusCode?.ToString() ?? "нет кода")}). {hint}");
     }
