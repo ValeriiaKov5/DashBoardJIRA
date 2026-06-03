@@ -1,0 +1,46 @@
+name: Build Windows EXE
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Show repository files
+        shell: pwsh
+        run: Get-ChildItem -Recurse -File | Select-Object -ExpandProperty FullName
+
+      - name: Publish EXE
+        shell: pwsh
+        run: |
+          $csproj = @(Get-ChildItem -Recurse -Filter "JiraSprintDashboard.csproj").Count
+          if ($csproj -eq 0) {
+            Write-Error "Missing JiraSprintDashboard.csproj. Upload all .cs files and .csproj to the repository."
+          }
+
+          $project = Get-ChildItem -Recurse -Filter "JiraSprintDashboard.csproj" | Select-Object -First 1
+          Set-Location $project.DirectoryName
+          Write-Host "Working directory: $(Get-Location)"
+          Write-Host "Source files: $((Get-ChildItem -Filter *.cs).Name -join ', ')"
+
+          dotnet publish JiraSprintDashboard.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          if (-not (Test-Path "bin/Release/net8.0-windows/win-x64/publish/JiraSprintDashboard.exe")) {
+            Write-Error "Build finished but EXE was not created."
+          }
+
+      - name: Upload EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: JiraSprintDashboard-exe
+          path: "**/publish/JiraSprintDashboard.exe"

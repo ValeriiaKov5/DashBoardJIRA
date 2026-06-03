@@ -208,10 +208,16 @@ public class JiraRoleActor
     [JsonPropertyName("displayName")]
     public string DisplayName { get; set; } = "";
 
-    public string? ResolveUserId() =>
-        !string.IsNullOrWhiteSpace(ActorUser?.UserId) ? ActorUser.UserId
-        : !string.IsNullOrWhiteSpace(Name) ? Name
-        : null;
+    public string? ResolveUserId()
+    {
+        var fromUser = ActorUser?.UserId;
+        if (!string.IsNullOrWhiteSpace(fromUser))
+        {
+            return fromUser;
+        }
+
+        return string.IsNullOrWhiteSpace(Name) ? null : Name;
+    }
 
     public string ResolveDisplayName() =>
         ActorUser?.DisplayName
