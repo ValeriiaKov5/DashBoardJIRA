@@ -1,6 +1,8 @@
+using System.Globalization;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace JiraSprintDashboard;
 
@@ -100,18 +102,166 @@ public class JiraClient : IDisposable
         var boardId = boardResponse.Values.FirstOrDefault()?.Id
             ?? throw new InvalidOperationException("Для проекта не найдена scrum/kanban доска.");
 
-        var sprints = await GetAsync<JiraSprintSearchResponse>(
+        var sprintsJson = await GetAsync<JsonElement>(
             $"rest/agile/1.0/board/{boardId}/sprint?state=active,future,closed&maxResults=200", ct);
 
-        return sprints.Values
-            .Where(IsSprintCreatedAfterCutoff)
+        if (!sprintsJson.TryGetProperty("values", out var values) || values.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        var result = new List<SprintInfo>();
+        foreach (var sprint in values.EnumerateArray())
+        {
+            if (await TryMapSprintAfterCutoffAsync(sprint, ct, out var sprintInfo))
+            {
+                result.Add(sprintInfo);
+            }
+        }
+
+        return result
             .OrderByDescending(s => s.Id)
-            .Select(s => new SprintInfo(s.Id, s.Name, s.State))
             .ToList();
     }
 
-    private static bool IsSprintCreatedAfterCutoff(JiraSprintItem sprint) =>
-        sprint.CreatedDate is { } created && created.Date > MinSprintCreatedDate;
+    private async Task<bool> TryMapSprintAfterCutoffAsync(
+        JsonElement sprint,
+        CancellationToken ct,
+        out SprintInfo sprintInfo)
+    {
+        sprintInfo = default!;
+        var id = sprint.TryGetProperty("id", out var idEl) ? idEl.GetInt32() : 0;
+        var name = sprint.TryGetProperty("name", out var nameEl) ? nameEl.GetString() ?? "" : "";
+        var state = sprint.TryGetProperty("state", out var stateEl) ? stateEl.GetString() ?? "" : "";
+
+        if (id == 0)
+        {
+            return false;
+        }
+
+        if (!TryGetSprintReferenceDate(sprint, name, out var referenceDate))
+        {
+            try
+            {
+                var detail = await GetAsync<JsonElement>($"rest/agile/1.0/sprint/{id}", ct);
+                if (!TryGetSprintReferenceDate(detail, name, out referenceDate))
+                {
+                    return false;
+                }
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        if (referenceDate.Date <= MinSprintCreatedDate)
+        {
+            return false;
+        }
+
+        sprintInfo = new SprintInfo(id, name, state);
+        return true;
+    }
+
+    private static bool TryGetSprintReferenceDate(JsonElement sprint, string name, out DateTime referenceDate)
+    {
+        foreach (var field in new[] { "createdDate", "startDate", "activatedDate", "completeDate", "endDate" })
+        {
+            if (sprint.TryGetProperty(field, out var dateEl)
+                && TryParseJiraDateElement(dateEl, out referenceDate))
+            {
+                return true;
+            }
+        }
+
+        if (TryParseDateFromSprintName(name, out referenceDate))
+        {
+            return true;
+        }
+
+        if (TryParseYearFromSprintName(name, out referenceDate))
+        {
+            return true;
+        }
+
+        referenceDate = default;
+        return false;
+    }
+
+    private static bool TryParseYearFromSprintName(string name, out DateTime date)
+    {
+        date = default;
+        var match = Regex.Match(name, @"\b(20[2-9]\d)\b");
+        if (!match.Success || !int.TryParse(match.Groups[1].Value, out var year) || year < 2026)
+        {
+            return false;
+        }
+
+        date = new DateTime(year, 1, 2);
+        return true;
+    }
+
+    private static bool TryParseJiraDateElement(JsonElement element, out DateTime date)
+    {
+        date = default;
+        if (element.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        var text = element.GetString();
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        if (DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var dto))
+        {
+            date = dto.Date;
+            return true;
+        }
+
+        return DateTime.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out date);
+    }
+
+    private static bool TryParseDateFromSprintName(string name, out DateTime date)
+    {
+        date = default;
+        DateTime? best = null;
+
+        foreach (Match match in Regex.Matches(name, @"\b(\d{2})\.(\d{2})\.(\d{4})\b"))
+        {
+            if (DateTime.TryParse(
+                    $"{match.Groups[3].Value}-{match.Groups[2].Value}-{match.Groups[1].Value}",
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.None,
+                    out var parsed))
+            {
+                best = best is null || parsed < best ? parsed : best;
+            }
+        }
+
+        foreach (Match match in Regex.Matches(name, @"\b(\d{4})-(\d{2})-(\d{2})\b"))
+        {
+            if (DateTime.TryParse(
+                    $"{match.Groups[1].Value}-{match.Groups[2].Value}-{match.Groups[3].Value}",
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.None,
+                    out var parsed))
+            {
+                best = best is null || parsed < best ? parsed : best;
+            }
+        }
+
+        if (best is null)
+        {
+            return false;
+        }
+
+        date = best.Value;
+        return true;
+    }
 
     public async Task<List<TeamMember>> GetProjectUsersAsync(string projectKey, CancellationToken ct)
     {

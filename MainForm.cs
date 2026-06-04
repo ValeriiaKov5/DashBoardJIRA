@@ -294,7 +294,16 @@ public class MainForm : Form
             }
 
             FillMemberFilter();
-            SetSettingsStatus("Проект, спринты и команда успешно загружены.");
+            if (_sprints.Count == 0)
+            {
+                SetSettingsStatus(
+                    "Проект и команда загружены. Спринтов после 01.01.2026 не найдено (нужна дата в API или в названии спринта).",
+                    true);
+            }
+            else
+            {
+                SetSettingsStatus($"Проект, спринты ({_sprints.Count}) и команда успешно загружены.");
+            }
         }
         catch (Exception ex)
         {
